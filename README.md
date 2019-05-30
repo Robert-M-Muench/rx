@@ -2,10 +2,8 @@
 
 [![Dub version](https://img.shields.io/dub/v/rx.svg)](https://code.dlang.org/packages/rx)
 [![MIT License](http://img.shields.io/badge/license-MIT-blue.svg?style=flat)](http://img.shields.io/badge/license-MIT-blue.svg?style=flat)
-[![Build Status](https://travis-ci.org/lempiji/rx.svg?branch=master)](https://travis-ci.org/lempiji/rx)
-<!---
-[![Coverage Status](https://coveralls.io/repos/github/lempiji/rx/badge.svg?branch=master)](https://coveralls.io/github/lempiji/rx?branch=master)
--->
+[![Build Status](https://travis-ci.org/lempiji/rx.svg?branch=dev)](https://travis-ci.org/lempiji/rx)
+[![codecov](https://codecov.io/gh/lempiji/rx/branch/dev/graph/badge.svg)](https://codecov.io/gh/lempiji/rx/branch/dev)
 
 ### Overview
 
@@ -45,7 +43,6 @@ void main()
     // result is like this
     assert(result == ["0", "2", "4", "6", "8"]);
 }
-
 ```
 
 And [more examples](https://github.com/lempiji/rx/tree/master/examples) or [Documents](https://lempiji.github.io/rx)
@@ -56,13 +53,13 @@ Setting dependencies in dub.json
 {
     ...
     "dependencies": {
-        "rx": "~>0.7.2"
+        "rx": "~>0.10.0"
     }
 }
 ```
 or dub.sdl
 ```
-dependency "rx" version="~>0.7.2"
+dependency "rx" version="~>0.10.0"
 ```
 
 ### Concepts
@@ -93,19 +90,41 @@ interface Observable(E)
     Disposable subscribe(Observer!E observer);
 }
 ```
+### Supported Compilers
+Supported compilers are `dmd` and `ldc` that latest 3 versions.
 
 ### License
 
 This library is under the MIT License.  
 Some code is borrowed from [Rx.NET](https://github.com/Reactive-Extensions/Rx.NET).
 
+### Contributing
+Issue and PullRequest are welcome! :smiley:
+
+Refer to [CONTRIBUTING.md](/CONTRIBUTING.md) for details.
+
+### Development
+
+#### Build and unittest
+
+```bash
+git clone https://github.com/lempiji/rx
+cd rx
+dub test
+```
+
+#### Update documents
+
+Use https://github.com/adamdruppe/adrdox
+
+
 ### Future work
 
 - generic observable factory
-  - create, start, timer, interval
+    - create, start, timer, interval
 - more subjects
-  - publish, replay
+    - publish, connectable
 - more algorithms
-  - window, combineLatest, zip
+    - window, zip, multicast
 - more test
 - more documents

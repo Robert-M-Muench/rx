@@ -5,11 +5,21 @@ os:
   - osx
 
 d:
+  # support 3 versions
   - dmd
+  - dmd-2.085.1
+  - dmd-2.084.0
+  - dmd-2.083.1
   - ldc
+  - ldc-1.15.0
+  - ldc-1.14.0
+  - ldc-1.13.0
 
 script:
   - dub test -b unittest-cov
+
+after_success:
+ - bash <(curl -s https://codecov.io/bash)
 
 test:
   dub test
