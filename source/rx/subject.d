@@ -5,11 +5,13 @@ module rx.subject;
 
 import rx.disposable;
 import rx.observer;
+import rx.contextobserver;
 import rx.observable;
 import rx.util : assumeThreadLocal;
 
 import core.atomic : atomicLoad, cas;
 import std.range : put;
+import std.algorithm.searching : countUntil;
 
 ///Represents an object that is both an observable sequence as well as an observer.
 interface Subject(E) : Observer!E, Observable!E
@@ -25,15 +27,15 @@ public:
     ///
     this()
     {
-        _observer = cast(shared) NopObserver!E.instance;
+      _observer = cast(shared) NopObserver!E.instance;
     }
 
 public:
     ///
     void put(E obj)
     {
-        auto temp = assumeThreadLocal(atomicLoad(_observer));
-        .put(temp, obj);
+      auto temp = assumeThreadLocal(atomicLoad(_observer));
+      .put(temp, obj);
     }
     ///
     void completed()
@@ -80,9 +82,11 @@ public:
         shared(Observer!E) newObserver = void;
         do
         {
+            // access current observer(s) in a thread safe way
             oldObserver = _observer;
             auto temp = assumeThreadLocal(atomicLoad(oldObserver));
 
+            // depending on type of our current observer we need to do different things
             if (temp is DoneObserver!E.instance)
             {
                 observer.completed();
@@ -95,19 +99,25 @@ public:
                 return NopDisposable.instance;
             }
 
+            // if we already have several observers, which is nothing else than a CompositeObserver
+            // add one more
             if (auto composite = cast(CompositeObserver!E) temp)
             {
                 newObserver = cast(shared) composite.add(observer);
             }
+            // if we don't have anything yet, just add the first observer
             else if (auto nop = cast(NopObserver!E) temp)
             {
                 newObserver = cast(shared) observer;
             }
+            // if we just have one observer, transform it into a CompositveObserver, so that more observers can be added
+            // happens only once
             else
             {
                 newObserver = cast(shared)(new CompositeObserver!E([temp, observer]));
             }
         }
+        // run this loop until newObserver was stored at _observer
         while (!cas(&_observer, oldObserver, newObserver));
 
         return subscription(this, observer);
@@ -140,11 +150,261 @@ public:
         while (!cas(&_observer, oldObserver, newObserver));
     }
 
+protected:
+    Observer!E currentObserver() @property
+    {
+        return assumeThreadLocal(atomicLoad(_observer));
+    }
+
 private:
     shared(Observer!E) _observer;
 }
 
+// @@
+// check double subscriptions?
+// unittests notifyAdd of non-subscribee
+class FilterSubjectObject(E) : SubjectObject!E {
+  public:
+    this(){
+      _filteredObserver = new CompositeObserver!E;
+    }
+
+    override void put(E obj){
+      if(_filteredObserver.isEmpty){
+        super.put(obj);
+      } else {
+        .put(_filteredObserver, obj);
+      }
+    }
+   
+//    override Disposable subscribe(ContextObserver!(T,E) observer){
+//      index[][observer.ptr] = observer;
+//      return super.subscribe(observer);
+//    }
+
+    override void unsubscribe(Observer!E observer){
+      super.unsubscribe(observer);
+      remove(observer);
+    }
+
+    /// manage the list if observers to notify
+    void notifyOnly(Observer!E observer){
+      _filteredObserver = new CompositeObserver!E;
+      notifyOnlyAdd(observer);
+    }
+
+    void notifyOnly(Observer!E[] observers){
+      _filteredObserver = new CompositeObserver!E(observers);
+    }
+
+    void notifyOnlyAdd(Observer!E observer){
+      // check that only subscribed observers can be filtered to
+      if(auto composite = cast(CompositeObserver!E) currentObserver()){
+          if(!composite.isIncluded(observer))
+            return;
+      } else {
+        // special case if the subject has only one observer yet
+        if(observer != currentObserver())
+          return;
+      }
+
+      _filteredObserver = _filteredObserver.add(observer);
+    }
+
+    void notifyOnlyAdd(Observer!E[] observers){
+      // check that all observers that should be notifiedOnly are subscirbed too
+      if(auto composite = cast(CompositeObserver!E) currentObserver()){
+        foreach(observer; observers){
+          if(!composite.isIncluded(observer))
+            return;
+        }
+      } else {
+        foreach(observer; observers){
+          if(observer != currentObserver())
+            return;
+        }
+      }
+
+      // all observers are subscribees, so we can add them
+      _filteredObserver = _filteredObserver.add(observers);
+    }
+
+    void remove(Observer!E observer){
+      _filteredObserver = _filteredObserver.removeStrict(observer);
+    }
+    
+  private:
+    Observer!E[void*][] index; // AA of arrays which store the observers for quick filter access
+    CompositeObserver!E _filteredObserver;
+}
+
 ///
+unittest
+{
+  import std.stdio;
+  writeln("HitTest");
+
+  // void hitTest(E)(Observer!E[] observers, E obj){
+  //   // iterate over all hit gobs
+  //   // and call .put on these
+  //   foreach(observer; observers) {
+  //     // check if observer equals what we search for
+  //     if(obj == 0)
+  //       writeln("Hit at ", obj, "Observer: putCpunt=", observer.putCount);
+  //   }
+  // }
+
+  import std.range;
+  auto subject = new FilterSubjectObject!int;
+  auto observer1 = new CounterObserver!int;
+  auto observer2 = new CounterObserver!int;
+  auto observer3 = new CounterObserver!int;
+  
+  subject.subscribe(observer1);
+  subject.subscribe(observer2);
+  subject.subscribe(observer3);
+
+  // send to all observers
+  subject.put(1);
+  assert(!observer1.hasNotBeenCalled());
+  assert(!observer2.hasNotBeenCalled());
+  assert(!observer3.hasNotBeenCalled());
+  
+  assert(observer1.lastValue == 1);
+  assert(observer1.putCount  == 1);
+  assert(observer2.lastValue == 1);
+  assert(observer2.putCount  == 1);
+  assert(observer3.lastValue == 1);
+  assert(observer3.putCount  == 1);
+
+  // limit the observers that get informed
+  subject.notifyOnlyAdd(observer2);
+  subject.put(2);
+  assert(observer1.lastValue == 1);
+  assert(observer1.putCount  == 1);
+  assert(observer2.lastValue == 2);
+  assert(observer2.putCount  == 2);
+  assert(observer3.lastValue == 1);
+  assert(observer3.putCount  == 1);
+
+  // limit the observers that get informed, replacing the prior list
+  subject.notifyOnly(observer3);
+  subject.put(3);
+  assert(observer1.lastValue == 1);
+  assert(observer1.putCount  == 1);
+  assert(observer2.lastValue == 2);
+  assert(observer2.putCount  == 2);
+  assert(observer3.lastValue == 3);
+  assert(observer3.putCount  == 2);
+
+  // inform all
+  subject.remove(observer3);
+  subject.put(4);
+  assert(observer1.lastValue == 4);
+  assert(observer1.putCount  == 2);
+  assert(observer2.lastValue == 4);
+  assert(observer2.putCount  == 3);
+  assert(observer3.lastValue == 4);
+  assert(observer3.putCount  == 3);
+
+  // unsubscribe observer => doesn't get informed anylonger
+  subject.unsubscribe(observer3);
+  subject.put(5);
+  assert(observer1.lastValue == 5);
+  assert(observer1.putCount  == 3);
+  assert(observer2.lastValue == 5);
+  assert(observer2.putCount  == 4);
+  assert(observer3.lastValue == 4);
+  assert(observer3.putCount  == 3);
+
+  //double subscribe observer => observer gets called twice on put
+  subject.subscribe(observer3);
+  subject.subscribe(observer3);
+  subject.put(6);
+  assert(observer1.lastValue == 6);
+  assert(observer1.putCount  == 4);
+  assert(observer2.lastValue == 6);
+  assert(observer2.putCount  == 5);
+  assert(observer3.lastValue == 6);
+  assert(observer3.putCount  == 5);
+  
+  // limit the observers that get informed, replacing the prior list => observer3 gets only called once, even observer is subscribed twice
+  //  to have the same behavior notifyOnly needs to be called twice as well
+  subject.notifyOnly(observer3);
+  subject.put(7);
+  assert(observer1.lastValue == 6);
+  assert(observer1.putCount  == 4);
+  assert(observer2.lastValue == 6);
+  assert(observer2.putCount  == 5);
+  assert(observer3.lastValue == 7);
+  assert(observer3.putCount  == 6);
+
+}
+
+unittest {
+  class myClass {
+    int putCount;
+    int putValue;
+    void myPut(int n){
+      putValue = n;
+      putCount++;
+    }
+
+    int completedCount;
+    void myCompleted(){
+      completedCount++;
+    }
+
+    int failurCount;
+    void myFailure(Exception e){
+      failurCount++;
+    }
+  }
+
+  myClass mc = new myClass;
+  auto observer1 = makeContextObserver(&mc.myPut);
+
+  auto subject = new FilterSubjectObject!int;
+  subject.subscribe(observer1);
+}
+
+// unittest {
+//   import std.stdio;
+//   writeln("\n\nRunning: TestFilter unittests");
+
+//   // tests if we can filter an oberserver list on a put() call
+//   template putFilter(E) {
+//   struct TestFilter(E) {
+//     Observer!E _observer;
+
+//     int opApply(int delegate(const Observer!E) foreach_body) const {
+//       int result = foreach_body(_observer);
+//       return result;
+//     }
+//   }
+//   }
+
+//   void callback(int value) {
+//     writeln(value);
+//   }
+
+//   auto subject = new SubjectObject!int;
+//   auto disposable = subject.doSubscribe!((int value) {callback(value);});
+//   assert(disposable !is null);
+
+//   subject.put(0); // normal put();
+//   subject.putFiltered(0);
+
+//   writeln("\n\n");
+
+// }
+
+class ContextFilterSubjectObject(E) : SubjectObject!E {
+  private:
+    
+}
+
+
 unittest
 {
     import std.array : appender;
@@ -259,6 +519,65 @@ unittest
     assert(observer.completedCount == 0);
     assert(observer.failureCount == 1);
     assert(observer.lastException is ex);
+}
+
+unittest
+{
+    // MyFilterSubject puts a value only on MyCustomObserver.
+
+    static class MyCustomObserver : Observer!int
+    {
+        int[] buf;
+
+        void put(int obj)
+        {
+            buf ~= obj;
+        }
+
+        void completed()
+        {
+        }
+
+        void failure(Exception ex)
+        {
+        }
+    }
+
+    static class MyFilterSubject : SubjectObject!int
+    {
+        override void put(int obj)
+        {
+            if (auto current = cast(CompositeObserver!int) currentObserver)
+            {
+                /// write a own filter, map, order and more  
+                foreach (observer; current.observers)
+                {
+                    if (auto myObserver = cast(MyCustomObserver) observer)
+                    {
+                        myObserver.put(obj);
+                    }
+                }
+            }
+        }
+    }
+
+    import std.array : appender;
+
+    auto myObserver = new MyCustomObserver;
+    auto buffer = appender!(int[]);
+
+    auto sub = new MyFilterSubject;
+    .put(sub, -1);
+
+    sub.subscribe(myObserver);
+    sub.subscribe(buffer);
+
+    .put(sub, 0);
+    .put(sub, 1);
+    .put(sub, 2);
+
+    assert(myObserver.buf.length == 3);
+    assert(buffer.data.length == 0);
 }
 
 private class Subscription(TSubject, TObserver) : Disposable
@@ -834,7 +1153,8 @@ public:
     ///
     void put(E obj)
     {
-        if (_completed) return;
+        if (_completed)
+            return;
         .put(_buffer, obj);
         .put(_subject, obj);
     }

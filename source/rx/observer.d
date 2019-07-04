@@ -109,6 +109,9 @@ unittest
 }
 
 ///Class that implements Observer interface and wraps the completed and failure method in virtual functions. This class extends the OutputRangeObject.
+//  observerObjects have to support the put(), completed() and failure() protocol
+//  if you want to assign own function use makeObserver, which use delegates
+//  this takes an other object wich isn't derived from an observer class and make an observer out of it by call the reactive functions indirectly
 class ObserverObject(R, E...) : OutputRangeObject!(R, E), staticMap!(Observer, E)
 {
 public:
@@ -136,11 +139,16 @@ public:
         }
     }
 
-private:
+ private:
     R _range;
 }
 
 ///Wraps subscribe method in virtual function.
+//
+//  makeObserver(&myFunc).observerObject!myFuncParameter();
+//  same as
+//  observerObject!myFuncParameter(makeObserver(&myFunc));
+//
 template observerObject(E)
 {
     ObserverObject!(R, E) observerObject(R)(R range)
@@ -206,6 +214,11 @@ unittest
     assert(failureCount == 0);
     observer.failure(null);
     assert(failureCount == 1);
+
+    // private member can be access because same module
+    auto observer1 = observerObject!int(test);
+    assert(test == cast(ObserverObject!(TestObserver,int))(observer1._range));
+    assert(test == observer1._range);
 }
 
 unittest
@@ -245,6 +258,9 @@ unittest
     assert(failureCount == 0);
     observer.failure(null);
     assert(failureCount == 1);
+
+    auto observer1 = observerObject!int(test);
+    assert(test == observer1._range);
 }
 
 unittest
@@ -419,9 +435,17 @@ private:
     }
 
 public:
+    ///
     this(Observer!E[] observers)
     {
         _observers = observers;
+    }
+
+public:
+    ///
+    Observer!E[] observers() @property
+    {
+        return _observers;
     }
 
 public:
@@ -448,6 +472,10 @@ public:
     {
         return new CompositeObserver!E(_observers ~ observer);
     }
+    CompositeObserver!E add(Observer!E[] observers)
+    {
+        return new CompositeObserver!E(_observers ~ observers);
+    }
     ///
     Observer!E remove(Observer!E observer)
     {
@@ -464,8 +492,37 @@ public:
 
         return new CompositeObserver!E(_observers[0 .. i] ~ _observers[i + 1 .. $]);
     }
+    ///
+    CompositeObserver!E removeStrict(Observer!E observer)
+    {
+        import std.algorithm : countUntil;
+
+        auto i = _observers.countUntil(observer);
+        if (i < 0)
+            return this;
+
+        if (_observers.length == 1)
+            return CompositeObserver!E.empty;
+        if (_observers.length == 2)
+        {
+          if (i == 0)
+            return new CompositeObserver!E(_observers[1 .. $]);
+          if (i == 1)
+            return new CompositeObserver!E(_observers[0 .. 1]);
+        }
+        return new CompositeObserver!E(_observers[0 .. i] ~ _observers[i + 1 .. $]);
+    }
+
+    bool isIncluded(Observer!E observer) {
+        import std.algorithm : countUntil;
+        return(_observers.countUntil(observer) != -1);
+    }
 
 public:
+    ///
+    @property bool isEmpty(){
+      return(_observers.length == 0);
+    }
     ///
     static CompositeObserver!E empty()
     {
@@ -524,8 +581,7 @@ unittest
 }
 
 ///The helper for the own observer.
-auto makeObserver(E)(void delegate(E) doPut, void delegate() doCompleted,
-        void delegate(Exception) doFailure)
+auto makeObserver(E)(void delegate(E) doPut, void delegate() doCompleted = null, void delegate(Exception) doFailure = null)
 {
     static struct AnonymouseObserver
     {
